@@ -28,6 +28,7 @@ _PAUSE_TAG_RE = re.compile(r"<#\s*(\d{1,2}(?:\.\d{1,2})?)\s*#>")
 _STRICT_MEME_TAG_RE = re.compile(r"&&([^&\n]+)&&")
 _BRACKET_MEME_TAG_RE = re.compile(r"\[([^\[\]\n]+)\](?!\()")
 _PAREN_MEME_TAG_RE = re.compile(r"\(([^()\n]+)\)")
+_ASCII_CONTROL_TAG_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,23}$")
 
 
 @dataclass
@@ -149,28 +150,69 @@ class SpeechTextSanitizer:
 
     def _strip_meme_tags(self, text: str) -> Tuple[str, List[str]]:
         valid_tags = self._load_meme_tags()
-        if not text or not valid_tags:
+        if not text:
             return text, []
 
         matched: List[str] = []
 
-        def _replace_if_valid(match: re.Match, *, allow_alt: bool = True) -> str:
+        def _replace_if_needed(match: re.Match, *, wrapped_kind: str) -> str:
             tag = (match.group(1) or "").strip().lower()
             if not tag:
                 return match.group(0)
-            if tag not in valid_tags:
+            if not self._should_strip_tag(
+                tag,
+                wrapped_kind=wrapped_kind,
+                valid_tags=valid_tags,
+            ):
                 return match.group(0)
-            if not allow_alt:
-                matched.append(tag)
-                return ""
             matched.append(tag)
             return ""
 
-        text = _STRICT_MEME_TAG_RE.sub(lambda m: _replace_if_valid(m, allow_alt=False), text)
-        text = _BRACKET_MEME_TAG_RE.sub(_replace_if_valid, text)
-        text = _PAREN_MEME_TAG_RE.sub(_replace_if_valid, text)
+        text = _STRICT_MEME_TAG_RE.sub(
+            lambda match: _replace_if_needed(match, wrapped_kind="strict"),
+            text,
+        )
+        text = _BRACKET_MEME_TAG_RE.sub(
+            lambda match: _replace_if_needed(match, wrapped_kind="bracket"),
+            text,
+        )
+        text = _PAREN_MEME_TAG_RE.sub(
+            lambda match: _replace_if_needed(match, wrapped_kind="paren"),
+            text,
+        )
 
         return text, self._dedupe_preserve_order(matched)
+
+    def _should_strip_tag(
+        self,
+        tag: str,
+        *,
+        wrapped_kind: str,
+        valid_tags: set[str],
+    ) -> bool:
+        if not tag:
+            return False
+
+        if wrapped_kind == "paren" and tag in MINIMAX_EXPRESSIVE_TAGS:
+            return False
+
+        if tag in valid_tags:
+            return True
+
+        if wrapped_kind != "strict":
+            return False
+
+        return self._looks_like_ascii_control_tag(tag)
+
+    @staticmethod
+    def _looks_like_ascii_control_tag(tag: str) -> bool:
+        if not tag or len(tag) > 24:
+            return False
+        if any(ch in tag for ch in "\r\n\t "):
+            return False
+        if re.search(r"[\u4e00-\u9fff]", tag):
+            return False
+        return bool(_ASCII_CONTROL_TAG_RE.fullmatch(tag))
 
     def _handle_pause_tags(self, text: str, *, keep: bool) -> Tuple[str, List[str]]:
         matched: List[str] = []
