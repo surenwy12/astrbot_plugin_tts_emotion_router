@@ -22,6 +22,11 @@ from .constants import (
     DEFAULT_EMO_MARKER_TAG,
     DEFAULT_EMOTION_KEYWORDS_LIST,
     DEFAULT_FEATURE_MODE,
+    DEFAULT_MIMO_MODEL,
+    DEFAULT_MIMO_SAMPLE_RATE,
+    DEFAULT_MIMO_STYLE,
+    DEFAULT_MIMO_URL,
+    DEFAULT_MIMO_VOICE_ID,
     DEFAULT_MINIMAX_BITRATE,
     DEFAULT_MINIMAX_CHANNEL,
     DEFAULT_MINIMAX_LANGUAGE_BOOST,
@@ -248,6 +253,21 @@ class ConfigManager:
             if k not in mm:
                 mm[k] = v
         engine["minimax"] = mm
+
+        mimo = engine.get("mimo", {}) or {}
+        mimo_defaults = {
+            "url": DEFAULT_MIMO_URL,
+            "key": "",
+            "model": DEFAULT_MIMO_MODEL,
+            "voice_id": DEFAULT_MIMO_VOICE_ID,
+            "audio_format": "wav",
+            "style": DEFAULT_MIMO_STYLE,
+            "sample_rate": DEFAULT_MIMO_SAMPLE_RATE,
+        }
+        for k, v in mimo_defaults.items():
+            if k not in mimo:
+                mimo[k] = v
+        engine["mimo"] = mimo
         self._config["tts_engine"] = engine
 
         # Emotion route
@@ -381,7 +401,7 @@ class ConfigManager:
     def get_tts_provider(self) -> str:
         engine = self.get("tts_engine", {}) or {}
         provider = str(engine.get("provider", DEFAULT_TTS_PROVIDER)).strip().lower()
-        return provider if provider in {"siliconflow", "minimax"} else DEFAULT_TTS_PROVIDER
+        return provider if provider in {"siliconflow", "minimax", "mimo"} else DEFAULT_TTS_PROVIDER
 
     def is_emotion_route_enabled(self) -> bool:
         return bool((self.get("emotion_route", {}) or {}).get("enable", True))
@@ -433,6 +453,38 @@ class ConfigManager:
                 "timeout": timeout,
                 "max_retries": max_retries,
                 "default_voice": str(mm.get("voice_id", DEFAULT_MINIMAX_VOICE_ID)),
+                "gain": 0.0,
+            }
+
+        if provider == "mimo":
+            mimo = engine.get("mimo", {}) or {}
+            audio_format = str(mimo.get("audio_format", "wav")).strip().lower() or "wav"
+            return {
+                "provider": "mimo",
+                "url": str(mimo.get("url", DEFAULT_MIMO_URL)).rstrip("/"),
+                "key": str(mimo.get("key", "")),
+                "model": str(mimo.get("model", DEFAULT_MIMO_MODEL)),
+                "voice_id": str(mimo.get("voice_id", DEFAULT_MIMO_VOICE_ID)),
+                "format": audio_format,
+                "sample_rate": _safe_int(mimo.get("sample_rate"), DEFAULT_MIMO_SAMPLE_RATE),
+                "style": str(mimo.get("style", DEFAULT_MIMO_STYLE) or "").strip(),
+                "speed": DEFAULT_API_SPEED,
+                "vol": DEFAULT_MINIMAX_VOL,
+                "pitch": DEFAULT_MINIMAX_PITCH,
+                "emotion": "neutral",
+                "bitrate": DEFAULT_MINIMAX_BITRATE,
+                "channel": DEFAULT_MINIMAX_CHANNEL,
+                "output_format": "base64",
+                "language_boost": "",
+                "proxy": "",
+                "voice_modify": {},
+                "timber_weights": [],
+                "pronunciation_dict": {},
+                "aigc_watermark": False,
+                "subtitle_enable": False,
+                "timeout": timeout,
+                "max_retries": max_retries,
+                "default_voice": str(mimo.get("voice_id", DEFAULT_MIMO_VOICE_ID)),
                 "gain": 0.0,
             }
 

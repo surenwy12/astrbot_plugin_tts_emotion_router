@@ -60,6 +60,7 @@ from .core.text_splitter import TextSplitter
 from .emotion.classifier import HeuristicClassifier
 from .tts.provider_siliconflow import SiliconFlowTTS
 from .tts.provider_minimax import MiniMaxTTS
+from .tts.provider_mimo import MimoTTS
 from .utils.audio import ensure_dir, cleanup_dir
 from .utils.extract import CodeAndLinkExtractor
 from .utils.text_sanitizer import PreparedSpeechText, SpeechTextSanitizer
@@ -170,6 +171,19 @@ class TTSEmotionRouter(Star):
                 timeout=api_cfg.get("timeout", 30),
             )
 
+        if provider == "mimo":
+            return MimoTTS(
+                api_url=api_cfg["url"],
+                api_key=api_cfg["key"],
+                model=api_cfg["model"],
+                fmt=api_cfg["format"],
+                voice_id=api_cfg.get("voice_id", "mimo_default"),
+                style=api_cfg.get("style", ""),
+                sample_rate=api_cfg.get("sample_rate", 24000),
+                max_retries=api_cfg.get("max_retries", 2),
+                timeout=api_cfg.get("timeout", 30),
+            )
+
         return SiliconFlowTTS(
             api_cfg["url"],
             api_cfg["key"],
@@ -188,6 +202,7 @@ class TTSEmotionRouter(Star):
             "provider", "url", "key", "model", "format", "speed", "gain", "sample_rate",
             "voice_id", "vol", "pitch", "emotion", "bitrate", "channel", "subtitle_enable",
             "output_format", "language_boost", "proxy", "voice_modify", "timber_weights",
+            "style",
             "pronunciation_dict", "aigc_watermark", "max_retries", "timeout",
         )
         return tuple((k, str(api_cfg.get(k))) for k in keys)

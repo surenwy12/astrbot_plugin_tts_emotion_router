@@ -14,7 +14,8 @@
         "description": "语音服务商",
         "options": [
           "siliconflow",
-          "minimax"
+          "minimax",
+          "mimo"
         ],
         "default": "siliconflow"
       },
@@ -206,6 +207,64 @@
             "type": "bool",
             "description": "是否返回字幕",
             "default": false
+          }
+        }
+      },
+      "mimo": {
+        "type": "object",
+        "description": "MiMo TTS 配置",
+        "condition": {
+          "provider": "mimo"
+        },
+        "items": {
+          "url": {
+            "type": "string",
+            "description": "API 地址",
+            "default": "https://api.xiaomimimo.com/v1"
+          },
+          "key": {
+            "type": "string",
+            "description": "API Key",
+            "default": ""
+          },
+          "model": {
+            "type": "string",
+            "description": "模型名",
+            "default": "mimo-v2-tts",
+            "hint": "当前官方文档仅说明支持 mimo-v2-tts。"
+          },
+          "voice_id": {
+            "type": "string",
+            "description": "默认音色",
+            "options": [
+              "mimo_default",
+              "default_zh",
+              "default_en"
+            ],
+            "default": "mimo_default",
+            "hint": "可按官方文档选择 mimo_default / default_zh / default_en。"
+          },
+          "audio_format": {
+            "type": "string",
+            "description": "音频格式",
+            "options": [
+              "wav",
+              "mp3"
+            ],
+            "default": "wav",
+            "hint": "当前插件接入的是非流式模式，推荐 wav，也支持 mp3。"
+          },
+          "style": {
+            "type": "string",
+            "description": "全局风格提示",
+            "default": "",
+            "hint": "会自动拼接为 <style>风格</style> 前缀，例如：东北话、悄悄话、唱歌。"
+          },
+          "sample_rate": {
+            "type": "int",
+            "description": "采样率（展示用途）",
+            "default": 24000,
+            "hint": "当前 MiMo 非流式接口主要按返回音频文件处理，此值用于配置记录和兼容字段。"
           }
         }
       }
