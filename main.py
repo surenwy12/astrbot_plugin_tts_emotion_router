@@ -67,6 +67,7 @@ from .utils.text_sanitizer import PreparedSpeechText, SpeechTextSanitizer
 
 logger = logging.getLogger(__name__)
 VOICE_ONLY_SUPPRESSION_TTL_SECONDS = 120
+RECENT_SPOKEN_ASSISTANT_CONTEXT_TTL_SECONDS = 300
 OUTPUT_MARKER_MODE_EXTRA = "_tts_emotion_router_output_marker_mode"
 OUTPUT_MARKER_MODE_PRESERVE = "preserve_for_tts"
 OUTPUT_MARKER_MODE_STRIP = "strip_visible"
@@ -324,6 +325,151 @@ class TTSEmotionRouter(Star):
 
     def _get_session_state(self, sid: str) -> SessionState:
         return self._session_state.setdefault(sid, SessionState())
+
+    @staticmethod
+    def _normalize_conversation_id(conversation_id: Optional[str]) -> Optional[str]:
+        cleaned = str(conversation_id or "").strip()
+        return cleaned or None
+
+    async def _remember_spoken_assistant_text(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+        *,
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return
+        sid = self._get_umo(event)
+        conversation_id = self._normalize_conversation_id(conversation_id)
+        if conversation_id is None:
+            conversation_id = self._normalize_conversation_id(
+                await self._get_current_conversation_id(event)
+            )
+        self._get_session_state(sid).set_spoken_assistant_text(
+            cleaned,
+            conversation_id=conversation_id,
+        )
+
+    async def _queue_pending_spoken_assistant_text(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+        *,
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return
+        sid = self._get_umo(event)
+        conversation_id = self._normalize_conversation_id(conversation_id)
+        if conversation_id is None:
+            conversation_id = self._normalize_conversation_id(
+                await self._get_current_conversation_id(event)
+            )
+        self._get_session_state(sid).queue_pending_spoken(
+            cleaned,
+            conversation_id,
+        )
+
+    async def _get_recent_spoken_assistant_text(
+        self,
+        event: AstrMessageEvent,
+    ) -> Optional[str]:
+        sid = self._get_umo(event)
+        st = self._session_state.get(sid)
+        if not st:
+            return None
+
+        text = (st.last_spoken_assistant_text or "").strip()
+        if not text:
+            return None
+
+        now_ts = time.time()
+        if now_ts - st.last_spoken_assistant_time > RECENT_SPOKEN_ASSISTANT_CONTEXT_TTL_SECONDS:
+            return None
+        current_conversation_id = self._normalize_conversation_id(
+            await self._get_current_conversation_id(event)
+        )
+        cached_conversation_id = self._normalize_conversation_id(
+            st.last_spoken_assistant_conversation_id
+        )
+        if current_conversation_id != cached_conversation_id:
+            logger.info(
+                "skip recent spoken assistant context sid=%s current_cid=%s cached_cid=%s reason=conversation_mismatch",
+                sid,
+                current_conversation_id,
+                cached_conversation_id,
+            )
+            return None
+        return text
+
+    @staticmethod
+    def _contexts_have_assistant_text(contexts: Any, text: str) -> bool:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return False
+
+        if not isinstance(contexts, list):
+            return False
+
+        for item in reversed(contexts[-8:]):
+            if not isinstance(item, dict):
+                continue
+            if item.get("role") != "assistant":
+                continue
+            content = item.get("content")
+            if isinstance(content, str) and content.strip() == cleaned:
+                return True
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if str(part.get("type", "")).strip() != "text":
+                        continue
+                    part_text = str(part.get("text", "") or "").strip()
+                    if part_text:
+                        text_parts.append(part_text)
+                if "".join(text_parts).strip() == cleaned:
+                    return True
+                if " ".join(text_parts).strip() == cleaned:
+                    return True
+                if "\n".join(text_parts).strip() == cleaned:
+                    return True
+        return False
+
+    async def _inject_recent_spoken_assistant_context(
+        self,
+        event: AstrMessageEvent,
+        request: Any,
+    ) -> None:
+        spoken_text = await self._get_recent_spoken_assistant_text(event)
+        if not spoken_text:
+            return
+
+        contexts = getattr(request, "contexts", None)
+        if contexts is None:
+            contexts = []
+        elif isinstance(contexts, str):
+            try:
+                contexts = json.loads(contexts)
+            except Exception:
+                contexts = []
+
+        if not isinstance(contexts, list):
+            return
+        if self._contexts_have_assistant_text(contexts, spoken_text):
+            return
+
+        contexts.append({"role": "assistant", "content": spoken_text, "_no_save": True})
+        request.contexts = contexts
+        logger.info(
+            "inject recent spoken assistant context sid=%s text=%s",
+            self._get_umo(event),
+            spoken_text[:80],
+        )
 
     async def _get_current_conversation_id(self, event: AstrMessageEvent) -> Optional[str]:
         manager = getattr(self.context, "conversation_manager", None)
@@ -593,8 +739,6 @@ class TTSEmotionRouter(Star):
         if text_voice_enabled and send_text:
             chain.append(Plain(text=send_text))
         chain.append(Record(file=norm_path))
-        if history_text:
-            st.set_assistant_text(history_text)
         return True, chain, history_text
 
     async def _send_manual_tts(
@@ -625,6 +769,7 @@ class TTSEmotionRouter(Star):
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, request):
         try:
+            await self._inject_recent_spoken_assistant_context(event, request)
             marker_mode = self.publish_output_marker_mode(event)
             if not self._should_inject_minimax_prompt(event):
                 return
@@ -864,7 +1009,10 @@ class TTSEmotionRouter(Star):
                     if out_chain:
                         result.chain = out_chain
                         if send_text:
-                            st.set_assistant_text(send_text)
+                            await self._queue_pending_spoken_assistant_text(
+                                event,
+                                send_text,
+                            )
                         return
 
             proc_res = await self.tts_processor.process(tts_text, st)
@@ -876,7 +1024,10 @@ class TTSEmotionRouter(Star):
                     text_voice_enabled=text_voice_enabled,
                 )
                 if send_text:
-                    st.set_assistant_text(send_text)
+                    await self._queue_pending_spoken_assistant_text(
+                        event,
+                        send_text,
+                    )
             else:
                 result.chain = display_chain
         finally:
@@ -979,6 +1130,30 @@ class TTSEmotionRouter(Star):
 
                 chain = getattr(result, "chain", None) or []
                 if any(isinstance(c, Record) for c in chain):
+                    umo = self._get_umo(event)
+                    st = self._session_state.get(umo)
+                    pending_history_text = (st.pending_history_text or "").strip() if st else ""
+                    pending_history_conversation_id = (
+                        st.pending_history_conversation_id if st else None
+                    )
+                    if pending_history_text:
+                        await self._remember_spoken_assistant_text(
+                            event,
+                            pending_history_text,
+                            conversation_id=pending_history_conversation_id,
+                        )
+                        if st:
+                            st.clear_pending_spoken()
+                    elif st:
+                        pending_spoken_text, pending_spoken_conversation_id = (
+                            st.consume_pending_spoken()
+                        )
+                        if pending_spoken_text:
+                            await self._remember_spoken_assistant_text(
+                                event,
+                                pending_spoken_text,
+                                conversation_id=pending_spoken_conversation_id,
+                            )
                     await self._ensure_history_saved(event)
 
                 try:
@@ -1098,12 +1273,12 @@ class TTSEmotionRouter(Star):
         yield event.chain_result(chain)
 
         if history_text and not hasattr(filter, "after_message_sent"):
-            await self._append_assistant_text_to_history(
+            await self._remember_spoken_assistant_text(
                 event,
                 history_text,
                 conversation_id=conversation_id,
-                create_if_missing=True,
             )
+            await self._ensure_history_saved(event)
 
     if hasattr(filter, "llm_tool"):
 
@@ -1128,13 +1303,27 @@ class TTSEmotionRouter(Star):
                 return
 
             history_text = history_or_error.strip()
+            sid = self._get_umo(event)
+            st = self._get_session_state(sid)
+            conversation_id = await self._get_current_conversation_id(event)
+            if history_text:
+                st.queue_pending_history(history_text, conversation_id)
             try:
                 await event.send(event.chain_result(chain))
             except Exception as e:
+                st.clear_pending_history()
                 logging.error("tts_speak send failed: %s", e)
                 yield f"发送失败：{e}"
                 return
 
+            if history_text:
+                await self._remember_spoken_assistant_text(
+                    event,
+                    history_text,
+                    conversation_id=conversation_id,
+                )
+                if not hasattr(filter, "after_message_sent"):
+                    await self._ensure_history_saved(event)
             event.clear_result()
             yield None
             yield history_text or "语音已发送。"

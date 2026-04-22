@@ -44,6 +44,11 @@ class SessionState:
     last_tts_time: float = 0.0
     last_assistant_text: Optional[str] = None
     last_assistant_text_time: float = 0.0
+    last_spoken_assistant_text: Optional[str] = None
+    last_spoken_assistant_time: float = 0.0
+    last_spoken_assistant_conversation_id: Optional[str] = None
+    pending_spoken_text: Optional[str] = None
+    pending_spoken_conversation_id: Optional[str] = None
     pending_history_text: Optional[str] = None
     pending_history_conversation_id: Optional[str] = None
     text_voice_enabled: Optional[bool] = None
@@ -66,6 +71,25 @@ class SessionState:
         self.last_assistant_text = text.strip() if text else None
         self.last_assistant_text_time = time.time()
 
+    def set_spoken_assistant_text(
+        self,
+        text: str,
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        """设置最近一次已实际发出的语音原话。"""
+        cleaned = text.strip() if text else ""
+        if not cleaned:
+            self.last_spoken_assistant_text = None
+            self.last_spoken_assistant_time = 0.0
+            self.last_spoken_assistant_conversation_id = None
+            return
+        self.set_assistant_text(cleaned)
+        self.last_spoken_assistant_text = cleaned
+        self.last_spoken_assistant_time = self.last_assistant_text_time
+        self.last_spoken_assistant_conversation_id = (
+            str(conversation_id).strip() if conversation_id else None
+        )
+
     def queue_pending_history(
         self,
         text: str,
@@ -77,12 +101,38 @@ class SessionState:
             str(conversation_id).strip() if conversation_id else None
         )
 
+    def queue_pending_spoken(
+        self,
+        text: str,
+        conversation_id: Optional[str],
+    ) -> None:
+        cleaned = text.strip() if text else ""
+        self.pending_spoken_text = cleaned or None
+        self.pending_spoken_conversation_id = (
+            str(conversation_id).strip() if conversation_id else None
+        )
+
+    def consume_pending_spoken(self) -> tuple[Optional[str], Optional[str]]:
+        text = self.pending_spoken_text
+        conversation_id = self.pending_spoken_conversation_id
+        self.pending_spoken_text = None
+        self.pending_spoken_conversation_id = None
+        return text, conversation_id
+
+    def clear_pending_spoken(self) -> None:
+        self.pending_spoken_text = None
+        self.pending_spoken_conversation_id = None
+
     def consume_pending_history(self) -> tuple[Optional[str], Optional[str]]:
         text = self.pending_history_text
         conversation_id = self.pending_history_conversation_id
         self.pending_history_text = None
         self.pending_history_conversation_id = None
         return text, conversation_id
+
+    def clear_pending_history(self) -> None:
+        self.pending_history_text = None
+        self.pending_history_conversation_id = None
 
     def mark_next_llm_plain_text_suppressed(self, ttl_seconds: Optional[float] = None) -> None:
         """
