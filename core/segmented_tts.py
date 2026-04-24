@@ -147,51 +147,6 @@ class SegmentedTTSProcessor:
         self.adaptive_buffer = adaptive_buffer
         self.max_segments = max_segments
 
-    def should_use_segmented(self, text: str, min_chars: int = 0) -> bool:
-        """
-        判断文本是否应使用分段语音。
-
-        规则：
-        1. 文本为空则不分段
-        2. 若设置了最小触发长度且未达到，则不分段
-        3. 仅当估算分段数大于 1 时才启用分段
-        """
-        cleaned = (text or "").strip()
-        if not cleaned:
-            return False
-
-        threshold = max(0, int(min_chars or 0))
-        if threshold > 0 and len(cleaned) < threshold:
-            return False
-
-        try:
-            estimated = self.splitter.estimate_segment_count(cleaned)
-        except Exception:
-            logger.warning("SegmentedTTS: estimate segment count failed", exc_info=True)
-            return False
-        return estimated > 1
-
-    def _calculate_interval(self, seg_result: SegmentTTSResult) -> float:
-        """
-        计算片段之间的等待时长。
-
-        - fixed: 返回固定间隔
-        - adaptive: 返回音频时长 + buffer
-        """
-        try:
-            if self.interval_mode == INTERVAL_MODE_ADAPTIVE:
-                duration = max(0.0, float(seg_result.duration_seconds or 0.0))
-                buffer = max(0.0, float(self.adaptive_buffer or 0.0))
-                return duration + buffer
-        except Exception:
-            logger.warning("SegmentedTTS: calculate adaptive interval failed", exc_info=True)
-
-        try:
-            return max(0.0, float(self.fixed_interval or 0.0))
-        except Exception:
-            logger.warning("SegmentedTTS: invalid fixed interval, fallback to 0", exc_info=True)
-            return 0.0
-
     async def process_and_send(
         self,
         text: str,
